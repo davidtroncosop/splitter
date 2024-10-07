@@ -15,4 +15,4 @@ RUN pip install --no-cache-dir streamlit google-generativeai pillow python-doten
 EXPOSE 8501
 
 # Comando para ejecutar la aplicación
-CMD ["streamlit", "run", "your_script.py"]
+CMD ["streamlit", "run", "app.py"]
