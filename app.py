@@ -24,11 +24,11 @@ def cargar_imagen(uploaded_file):
 def analizar_imagen(imagen):
     prompt = """
     Analiza esta imagen de una boleta de restaurante. 
-    Extrae los ítems y sus precios en CLP (pesos chilenos).
+    Extrae los ítems, sus cantidades y sus precios unitarios en CLP (pesos chilenos).
     Devuelve SOLO un objeto JSON válido con la siguiente estructura:
     {
         "items": [
-            {"item": "nombre del item", "precio": "precio en formato CLP sin puntos"},
+            {"item": "nombre del item", "cantidad": "cantidad", "precio_unitario": "precio unitario en formato CLP sin puntos"},
             ...
         ]
     }
@@ -42,16 +42,15 @@ def extraer_json(texto):
     return json_match.group() if json_match else None
 
 def procesar_resultado(resultado):
-    st.text("Respuesta completa del modelo:")
-    st.text(resultado)
-    
     json_str = extraer_json(resultado)
     if json_str:
         try:
             datos = json.loads(json_str)
             if 'items' in datos:
                 for item in datos['items']:
-                    item['precio'] = int(item['precio'])
+                    item['cantidad'] = int(item['cantidad'])
+                    item['precio_unitario'] = int(item['precio_unitario'])
+                    item['total'] = item['cantidad'] * item['precio_unitario']
                 return pd.DataFrame(datos['items'])
             else:
                 st.error("El JSON no contiene la clave 'items' esperada.")
@@ -64,10 +63,13 @@ def procesar_resultado(resultado):
     st.warning("Intentando procesar manualmente la respuesta...")
     items = []
     for line in resultado.split('\n'):
-        match = re.search(r'([^:]+):\s*\$?\s*([\d.]+)', line)
+        match = re.search(r'([^:]+):\s*(\d+)\s*x\s*\$?\s*([\d.]+)', line)
         if match:
-            precio = int(match.group(2).replace('.', ''))
-            items.append({"item": match.group(1).strip(), "precio": precio})
+            item = match.group(1).strip()
+            cantidad = int(match.group(2))
+            precio_unitario = int(match.group(3).replace('.', ''))
+            total = cantidad * precio_unitario
+            items.append({"item": item, "cantidad": cantidad, "precio_unitario": precio_unitario, "total": total})
     
     return pd.DataFrame(items) if items else pd.DataFrame()
 
@@ -99,50 +101,68 @@ def main():
                     return
 
         if st.session_state.imagen_procesada:
-            st.subheader("Tabla de ítems extraídos (puedes editar los precios)")
+            st.subheader("Tabla de ítems extraídos (puedes editar)")
             edited_df = st.data_editor(
                 st.session_state.df,
                 num_rows="dynamic",
                 column_config={
-                    "precio": st.column_config.NumberColumn(
-                        "Precio",
-                        help="Precio en CLP",
+                    "cantidad": st.column_config.NumberColumn(
+                        "Cantidad",
+                        help="Cantidad del ítem",
+                        min_value=1,
+                        step=1,
+                    ),
+                    "precio_unitario": st.column_config.NumberColumn(
+                        "Precio Unitario",
+                        help="Precio unitario en CLP",
                         min_value=0,
-                        max_value=1000000,
                         step=100,
                         format="$%d"
+                    ),
+                    "total": st.column_config.NumberColumn(
+                        "Total",
+                        help="Total por ítem",
+                        format="$%d"
                     )
-                }
+                },
+                hide_index=True,
             )
             
-            total_items = edited_df['precio'].sum()
+            edited_df['total'] = edited_df['cantidad'] * edited_df['precio_unitario']
+            total_items = edited_df['total'].sum()
             st.write(f"Total de los ítems: ${total_items:,.0f}")
             
-            st.subheader("Matriz de Consumo")
+            st.subheader("Asignación de consumo")
             num_personas = st.number_input("Número de personas", min_value=1, value=2, key="num_personas")
             
-            nombres = [st.text_input(f"Nombre de la persona {i+1}", value=f"Persona {i+1}", key=f"nombre_{i}") for i in range(num_personas)]
+            nombres = []
+            for i in range(num_personas):
+                nombre = st.text_input(f"Nombre de la persona {i+1}", value=f"Persona {i+1}", key=f"nombre_{i}")
+                nombres.append(nombre)
             
+            st.write("Marca quién consumió cada ítem:")
+            
+            # Crear una matriz para los checkboxes
             matriz_consumo = []
-            for idx, item in enumerate(edited_df['item']):
-                row = []
+            for idx, row in edited_df.iterrows():
+                st.write(f"**{row['item']}** (${row['total']:,.0f})")
                 cols = st.columns(num_personas)
+                fila_consumo = []
                 for i, col in enumerate(cols):
                     with col:
-                        key_checkbox = f"{nombres[i]}_{item}_{idx}"
-                        consumio = st.checkbox(f"{nombres[i]} consumió {item}", key=key_checkbox)
-                        row.append(1 if consumio else 0)
-                matriz_consumo.append(row)
+                        consumio = st.checkbox(f"{nombres[i]}", key=f"{nombres[i]}_{row['item']}_{idx}")
+                        fila_consumo.append(1 if consumio else 0)
+                matriz_consumo.append(fila_consumo)
             
             matriz_consumo = np.array(matriz_consumo)
-            precios = np.array(edited_df['precio'])
+            totales = np.array(edited_df['total'])
             
             # Calcular el costo por ítem dividido entre las personas que lo consumieron
             costos_divididos = np.zeros_like(matriz_consumo, dtype=float)
-            for i, (precio, consumidores) in enumerate(zip(precios, matriz_consumo)):
+            for i, (total, consumidores) in enumerate(zip(totales, matriz_consumo)):
                 num_consumidores = np.sum(consumidores)
                 if num_consumidores > 0:
-                    costos_divididos[i] = consumidores * (precio / num_consumidores)
+                    costos_divididos[i] = consumidores * (total / num_consumidores)
             
             gastos_por_persona = np.sum(costos_divididos, axis=0)
             
