@@ -8,6 +8,7 @@ import numpy as np
 import json
 import re
 import gc
+import io
 
 # Cargar variables de entorno
 load_dotenv()
@@ -19,8 +20,27 @@ genai.configure(api_key=api_key)
 # Cargar el modelo
 model = genai.GenerativeModel('gemini-1.5-flash')
 
+def redimensionar_imagen(imagen, max_size=1600, quality=85):
+    """Redimensiona la imagen si excede el tamaño máximo especificado."""
+    width, height = imagen.size
+    if max(width, height) > max_size:
+        if width > height:
+            new_width = max_size
+            new_height = int(height * (max_size / width))
+        else:
+            new_height = max_size
+            new_width = int(width * (max_size / height))
+        imagen = imagen.resize((new_width, new_height), PIL.Image.LANCZOS)
+    
+    # Convertir a JPEG y comprimir
+    buffer = io.BytesIO()
+    imagen.convert('RGB').save(buffer, format='JPEG', quality=quality)
+    buffer.seek(0)
+    return PIL.Image.open(buffer)
+
 def cargar_imagen(uploaded_file):
-    return PIL.Image.open(uploaded_file)
+    imagen = PIL.Image.open(uploaded_file)
+    return redimensionar_imagen(imagen)
 
 def analizar_imagen(imagen):
     prompt = """
