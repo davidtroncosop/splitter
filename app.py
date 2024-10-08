@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import json
 import re
+import gc
 
 # Cargar variables de entorno
 load_dotenv()
@@ -35,12 +36,15 @@ def analizar_imagen(imagen):
     Asegúrate de devolver los precios como strings sin puntos de miles (ej. "5900" en lugar de "5.900").
     """
     respuesta = model.generate_content([prompt, imagen])
+    del imagen  # Liberar la referencia a la imagen
+    gc.collect()  # Forzar la recolección de basura
     return respuesta.text
 
 def extraer_json(texto):
     json_match = re.search(r'\{.*\}', texto, re.DOTALL)
     return json_match.group() if json_match else None
 
+@st.cache_data(max_entries=10, ttl=3600)
 def procesar_resultado(resultado):
     json_str = extraer_json(resultado)
     if json_str:
@@ -72,6 +76,21 @@ def procesar_resultado(resultado):
             items.append({"item": item, "cantidad": cantidad, "precio_unitario": precio_unitario, "total": total})
     
     return pd.DataFrame(items) if items else pd.DataFrame()
+
+def procesar_items_por_lotes(df, nombres, num_personas, batch_size=10):
+    matriz_consumo = []
+    for i in range(0, len(df), batch_size):
+        batch = df.iloc[i:i+batch_size]
+        for idx, row in batch.iterrows():
+            st.write(f"**{row['item']}** (${row['total']:,.0f})")
+            cols = st.columns(num_personas)
+            fila_consumo = []
+            for j, col in enumerate(cols):
+                with col:
+                    consumio = st.checkbox(f"{nombres[j]}", key=f"{nombres[j]}_{row['item']}_{idx}")
+                    fila_consumo.append(1 if consumio else 0)
+            matriz_consumo.append(fila_consumo)
+    return np.array(matriz_consumo, dtype=np.float32)
 
 def main():
     st.title("Divisor de Gastos de Restaurante")
@@ -142,23 +161,12 @@ def main():
             
             st.write("Marca quién consumió cada ítem:")
             
-            # Crear una matriz para los checkboxes
-            matriz_consumo = []
-            for idx, row in edited_df.iterrows():
-                st.write(f"**{row['item']}** (${row['total']:,.0f})")
-                cols = st.columns(num_personas)
-                fila_consumo = []
-                for i, col in enumerate(cols):
-                    with col:
-                        consumio = st.checkbox(f"{nombres[i]}", key=f"{nombres[i]}_{row['item']}_{idx}")
-                        fila_consumo.append(1 if consumio else 0)
-                matriz_consumo.append(fila_consumo)
+            matriz_consumo = procesar_items_por_lotes(edited_df, nombres, num_personas)
             
-            matriz_consumo = np.array(matriz_consumo)
-            totales = np.array(edited_df['total'])
+            totales = np.array(edited_df['total'], dtype=np.float32)
             
             # Calcular el costo por ítem dividido entre las personas que lo consumieron
-            costos_divididos = np.zeros_like(matriz_consumo, dtype=float)
+            costos_divididos = np.zeros_like(matriz_consumo, dtype=np.float32)
             for i, (total, consumidores) in enumerate(zip(totales, matriz_consumo)):
                 num_consumidores = np.sum(consumidores)
                 if num_consumidores > 0:
